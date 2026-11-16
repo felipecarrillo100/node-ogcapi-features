@@ -2,16 +2,15 @@ import type { Request } from "express";
 import { Router } from "express";
 import type { Feature, Geometry } from "geojson";
 import type { Pool } from "pg";
-import { type Collection, collectionById, geometry84 } from "./collections.ts";
+import { type Collection, collectionById, GEOMETRY, geometry84 } from "./collections.ts";
 import { escapeHtml, notFound } from "./errors.ts";
+import { addFilter, addFilters, itemsParams } from "./filter.ts";
 import { ogc, sendHtml, sendJson } from "./handler.ts";
-import { mapScript, page, propertiesTable } from "./html.ts";
+import { featuresTable, mapScript, page, propertiesTable } from "./html.ts";
 import { type Link, MEDIA, ownQuery, selfAndAlternate, url } from "./links.ts";
 import type { Format } from "./negotiate.ts";
-import { checkParams, LIMIT, parseBbox, parseDatetime, parseLimit, parseOffset } from "./params.ts";
-
-/** The query parameters of `/items`. */
-export const ITEMS_PARAMS = ["f", "limit", "offset", "bbox", "datetime"] as const;
+import { checkParams, datetimeLiteral, LIMIT, parseBbox, parseLimit, parseOffset } from "./params.ts";
+import { Where } from "./where.ts";
 
 interface Row {
   id: number;
@@ -19,42 +18,23 @@ interface Row {
   geom_json: string;
 }
 
-/** A WHERE clause and its values, built one condition at a time. */
-class Where {
-  readonly conditions: string[] = [];
-  readonly params: unknown[] = [];
-  /** `$n` for a new value. */
-  value(v: unknown): string {
-    this.params.push(v);
-    return `$${this.params.length}`;
-  }
-  toString(): string {
-    return this.conditions.length ? `WHERE ${this.conditions.join(" AND ")}` : "";
-  }
-}
-
-/** The `bbox` and `datetime` of the request, as conditions on the collection. */
+/**
+ * The request's conditions on the collection, combined with AND: `bbox`, `datetime`, and Part 3's `filter` and
+ * queryables as query parameters.
+ */
 function itemsWhere(req: Request, c: Collection): Where {
   const where = new Where();
+  // bbox and datetime are CQL2 too, compiled by toSql as filters are, so they select what the map selects: the
+  // box as S_INTERSECTS (ogc-cql2's exact test, across the antimeridian as one literal; PostGIS's ST_Intersects misses
+  // points on an edge on arm64), the instant or interval as T_INTERSECTS (to the millisecond).
   const bbox = parseBbox(req);
-  if (bbox) {
-    const [w, s, e, n] = bbox;
-    const env = (x1: number, x2: number) =>
-      `ST_MakeEnvelope(${where.value(x1)}, ${where.value(s)}, ${where.value(x2)}, ${where.value(n)}, 4326)`;
-    // West above east: the box crosses the antimeridian, so it is two boxes.
-    const boxes = w <= e ? [env(w, e)] : [env(w, 180), env(-180, e)];
-    where.conditions.push(`(${boxes.map((b) => `ST_Intersects(${geometry84(c)}, ${b})`).join(" OR ")})`);
+  if (bbox) addFilter(where, c, { op: "s_intersects", args: [{ property: GEOMETRY }, { bbox }] }, "bbox");
+  const datetime = datetimeLiteral(req);
+  // Without an instant (features), datetime selects every feature (Part 1).
+  if (datetime && c.instant) {
+    addFilter(where, c, { op: "t_intersects", args: [{ property: c.instant }, datetime] }, "datetime");
   }
-  const datetime = parseDatetime(req);
-  if (datetime && c.temporal) {
-    // A feature whose instant is NULL isn't in any interval.
-    where.conditions.push(`${c.temporal} IS NOT NULL`);
-    if (datetime.from) where.conditions.push(`${c.temporal} >= ${where.value(datetime.from)}::timestamptz`);
-    if (datetime.to)
-      where.conditions.push(
-        `${c.temporal} ${datetime.toExclusive ? "<" : "<="} ${where.value(datetime.to)}::timestamptz`,
-      );
-  }
+  addFilters(req, c, where);
   return where;
 }
 
@@ -89,7 +69,7 @@ export function itemsRouter(pool: Pool): Router {
     "/collections/:collectionId/items",
     ogc(async (req, res, f: Format) => {
       const c = collectionOf(req);
-      checkParams(req, ITEMS_PARAMS);
+      checkParams(req, itemsParams(c));
       const limit = parseLimit(req);
       const offset = parseOffset(req);
       const where = itemsWhere(req, c);
@@ -117,19 +97,19 @@ export function itemsRouter(pool: Pool): Router {
 
       // The map shows exactly the features listed: this page's own query, as GeoJSON.
       const dataUrl = url(req, req.path, { ...ownQuery(req), f: "json" });
-      const table = features
-        .map((ft) => {
-          const href = url(req, `/collections/${c.id}/items/${ft.id}`, { f: "html" });
-          return `<tr><td><a href="${escapeHtml(href)}">${ft.id}</a></td><td>${escapeHtml(JSON.stringify(ft.properties))}</td></tr>`;
-        })
-        .join("\n");
+      // One column per property: the queryables in their order (not the geometry), then any other found.
+      const columns = Object.keys(c.queryables).filter((name) => name !== GEOMETRY);
+      const table = featuresTable(features, columns, (id) =>
+        url(req, `/collections/${c.id}/items/${id}`, { f: "html" }),
+      );
       const html = [
         `<h1>${escapeHtml(c.title)}: items</h1>`,
         `<p>${features.length} of ${numberMatched} features${offset ? `, from number ${offset + 1}` : ""}.</p>`,
+        limitForm(req, limit),
         mapScript({ url: dataUrl }),
-        `<table>\n<tr><th>id</th><th>properties</th></tr>\n${table}\n</table>`,
+        table,
       ].join("\n");
-      return sendHtml(res, page(req, `${c.title}: items`, crumbs(c), html, { links, map: true }));
+      return sendHtml(res, page(req, `${c.title}: items`, crumbs(c), html, { links, map: true, grid: true }));
     }),
   );
 
@@ -162,12 +142,34 @@ export function itemsRouter(pool: Pool): Router {
         page(req, `${c.title}: feature ${feature.id}`, [...crumbs(c), [String(feature.id), req.path]], html, {
           links,
           map: true,
+          grid: true,
         }),
       );
     }),
   );
 
   return router;
+}
+
+/** The page sizes the HTML items page offers; the current one is added when it's another. */
+const LIMITS = [LIMIT.default, 100, 1000, LIMIT.maximum];
+
+/**
+ * The HTML items page's "Limit" form: a plain GET to the same page with the chosen `limit`, every other parameter of
+ * the page kept (hidden), and `offset` dropped, so a new page size starts at the first page.
+ */
+function limitForm(req: Request, limit: number): string {
+  const choices = [...new Set([...LIMITS, limit])].sort((a, b) => a - b);
+  const options = choices.map((n) => `<option${n === limit ? " selected" : ""}>${n}</option>`).join("");
+  const kept = Object.entries({ ...ownQuery(req), f: "html" })
+    .filter(([k]) => k !== "limit" && k !== "offset")
+    .map(([k, v]) => `<input type="hidden" name="${escapeHtml(k)}" value="${escapeHtml(v)}">`)
+    .join("\n");
+  return `<form method="get" action="${escapeHtml(req.path)}">
+<label>Limit <select name="limit">${options}</select></label>
+${kept}
+<button>Apply</button>
+</form>`;
 }
 
 /**

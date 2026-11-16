@@ -5,9 +5,12 @@ const server = useServer();
 
 const CQL2 = "http://www.opengis.net/spec/cql2/1.0/conf";
 const FEATURES_1 = "http://www.opengis.net/spec/ogcapi-features-1/1.0/conf";
+const FEATURES_3 = "http://www.opengis.net/spec/ogcapi-features-3/1.0/conf";
+const COMMON_3 = "http://www.opengis.net/spec/ogcapi-common-3/1.0/conf";
+const FEATURES_4 = "http://www.opengis.net/spec/ogcapi-features-4/1.0/conf";
 
 describe("GET /conformance", () => {
-  it("lists the CQL2 classes MapEvolution reads first, in order, then the OGC API ones", async () => {
+  it("lists the 9 CQL2 classes MapEvolution reads first, in order, then the others", async () => {
     const { status, contentType, body } = await request(`${server.url}/conformance`);
     expect(status).toBe(200);
     expect(contentType).toBe("application/json; charset=utf-8");
@@ -22,10 +25,25 @@ describe("GET /conformance", () => {
         `${CQL2}/basic-spatial-functions`,
         `${CQL2}/basic-spatial-functions-plus`,
         `${CQL2}/spatial-functions`,
+        `${CQL2}/temporal-functions`,
+        `${CQL2}/arithmetic`,
         `${FEATURES_1}/core`,
         `${FEATURES_1}/oas30`,
         `${FEATURES_1}/html`,
         `${FEATURES_1}/geojson`,
+        `${FEATURES_3}/queryables`,
+        `${FEATURES_3}/queryables-query-parameters`,
+        `${FEATURES_3}/filter`,
+        `${FEATURES_3}/features-filter`,
+        `${CQL2}/cql2-text`,
+        `${CQL2}/cql2-json`,
+        `${COMMON_3}/schemas`,
+        `${COMMON_3}/advanced-property-roles`,
+        `${COMMON_3}/returnables-and-receivables`,
+        `${COMMON_3}/queryables`,
+        `${FEATURES_4}/create-replace-delete`,
+        `${FEATURES_4}/update`,
+        `${FEATURES_4}/features`,
       ],
     });
   });

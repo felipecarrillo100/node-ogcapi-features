@@ -82,9 +82,13 @@ describe("/api and Swagger UI", () => {
       "/collections/features",
       "/collections/features/items",
       "/collections/features/items/{featureId}",
+      "/collections/features/queryables",
+      "/collections/features/schema",
       "/collections/routes",
       "/collections/routes/items",
       "/collections/routes/items/{featureId}",
+      "/collections/routes/queryables",
+      "/collections/routes/schema",
     ]);
   });
 
@@ -113,7 +117,7 @@ describe("collections", () => {
     expect(routes.extent).toEqual({
       spatial: { bbox: [[-74, -36.8, 174.8, 52.37]], crs: CRS84 },
       temporal: {
-        interval: [["2024-05-01T08:00:00Z", "2025-01-01T00:00:00Z"]],
+        interval: [["2024-05-01T08:00:00.000Z", "2025-01-01T00:00:00.000Z"]],
         trs: "http://www.opengis.net/def/uom/ISO-8601/0/Gregorian",
       },
     });
@@ -123,6 +127,10 @@ describe("collections", () => {
       "alternate text/html",
       "items application/geo+json",
       "items text/html",
+      "http://www.opengis.net/def/rel/ogc/1.0/queryables application/schema+json",
+      "http://www.opengis.net/def/rel/ogc/1.0/queryables text/html",
+      "http://www.opengis.net/def/rel/ogc/1.0/schema application/schema+json",
+      "http://www.opengis.net/def/rel/ogc/1.0/schema text/html",
     ]);
   });
 
@@ -155,7 +163,7 @@ describe("items", () => {
           [2.35, 48.86],
         ],
       },
-      properties: { name: "Brussels–Paris", departure: "2024-05-01T08:00:00Z", length_km: 264, lanes: 3 },
+      properties: { name: "Brussels–Paris", departure: "2024-05-01T08:00:00.000Z", length_km: 264, lanes: 3 },
     });
     expect(rels(body.links)).toEqual([
       "self application/geo+json",
@@ -224,7 +232,15 @@ describe("items", () => {
     for (const [datetime, expected] of cases) {
       expect(ids((await items("routes", `datetime=${encodeURIComponent(datetime)}`)).body), datetime).toEqual(expected);
     }
-    for (const bad of ["2024-13-01", "2024-06-01/2024-05-01", "yesterday", "2024-05-01T08:00:00"]) {
+    for (const bad of [
+      "2024-13-01",
+      "2024-06-01/2024-05-01",
+      "yesterday",
+      "2024-05-01T08:00:00",
+      "2024-02-30",
+      "2024-02-30T08:00:00Z",
+      "2024-05-01T25:00:00Z",
+    ]) {
       expect((await items("routes", `datetime=${bad}`)).status, bad).toBe(400);
     }
   });
@@ -248,6 +264,56 @@ describe("items", () => {
     );
     expect(body).toContain('© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap contributors</a>');
     expect((await request(`${server.url}/assets/maplibre-gl/maplibre-gl.mjs`)).status).toBe(200);
+  });
+
+  it("as HTML: a Limit form, keeping the page's other parameters and dropping offset", async () => {
+    const query = "f=html&limit=25&offset=3&bbox=4,50,5,51&filter=lanes%20%3E%3D%202";
+    const { body } = await request<string>(`${server.url}/collections/routes/items?${query}`);
+    const form = body.slice(body.indexOf("<form"), body.indexOf("</form>") + 7);
+    expect(form).toContain('<form method="get" action="/collections/routes/items">');
+    expect(form).toContain(
+      '<select name="limit"><option>10</option><option selected>25</option><option>100</option><option>1000</option><option>10000</option></select>',
+    );
+    expect(form).toContain('<input type="hidden" name="f" value="html">');
+    expect(form).toContain('<input type="hidden" name="bbox" value="4,50,5,51">');
+    expect(form).toContain('<input type="hidden" name="filter" value="lanes &gt;= 2">');
+    expect(form).not.toContain('name="offset"');
+    // What the browser sends on Apply with 100: the same features, from the first page.
+    const applied = await request<string>(
+      `${server.url}/collections/routes/items?f=html&bbox=4,50,5,51&filter=lanes%20%3E%3D%202&limit=100`,
+    );
+    expect(applied.status).toBe(200);
+    expect(applied.body).toContain("<option selected>100</option>");
+    expect(applied.body).toContain("4 of 4 features.");
+  });
+
+  it("as HTML: a table with one column per property, values as text, in a box that scrolls", async () => {
+    const tableOf = async (path: string) => {
+      const { body } = await request<string>(`${server.url}${path}`);
+      return body.slice(body.indexOf('<div class="scroll">'), body.indexOf("</table></div>") + 14);
+    };
+    const features = await tableOf("/collections/features/items?f=html");
+    expect(features).toContain(
+      "<thead><tr><th>id</th><th>name</th><th>services</th><th>zones</th><th>inspections</th><th>tags</th><th>floors</th><th>visits</th></tr></thead>",
+    );
+    const row = (id: number) =>
+      features.slice(
+        features.indexOf(`/items/${id}?f=html">${id}</a>`),
+        features.indexOf("</tr>", features.indexOf(`/items/${id}?f=html">`)),
+      );
+    // Brussels: lists as their values; Sydney: an empty list; New York: no services at all.
+    expect(row(7)).toContain("<td>Brussels</td><td>lift, toilets, parking</td><td>1, 2</td>");
+    expect(row(10)).toContain("<td>Sydney</td><td>[]</td>");
+    expect(row(9)).toContain("<td>New York</td><td></td><td></td><td></td><td>museum</td>");
+    expect(features).not.toContain("{&quot;");
+    const routes = await tableOf("/collections/routes/items?f=html");
+    expect(routes).toContain(
+      "<thead><tr><th>id</th><th>name</th><th>departure</th><th>length_km</th><th>lanes</th></tr></thead>",
+    );
+    expect(routes).toContain("<td>Brussels–Paris</td><td>2024-05-01T08:00:00.000Z</td><td>264</td><td>3</td>");
+    const { body } = await request<string>(`${server.url}/collections/routes/items?f=html`);
+    expect(body).toContain(".scroll { overflow: auto; max-height: 60vh; }");
+    expect(body).toContain("table.grid thead th { position: sticky; top: 0;");
   });
 
   it("HEAD answers as GET, without a body", async () => {

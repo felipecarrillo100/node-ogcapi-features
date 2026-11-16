@@ -10,7 +10,14 @@ export interface PageOptions {
   links?: readonly Link[];
   /** Loads MapLibre GL JS (its CSS and the module) for a map in the body. */
   map?: boolean;
+  /** Styles the body's `.grid` tables: thin borders, a header row that stays in view, a box that scrolls both ways. */
+  grid?: boolean;
 }
+
+const GRID_STYLE = `.scroll { overflow: auto; max-height: 60vh; }
+table.grid { border-collapse: collapse; }
+table.grid th, table.grid td { border: 1px solid; padding: 2px 6px; white-space: nowrap; text-align: left; }
+table.grid thead th { position: sticky; top: 0; background: Canvas; }`;
 
 /** A plain HTML5 page: a breadcrumb, the body, then the resource's links. */
 export function page(
@@ -24,9 +31,11 @@ export function page(
     .map(([label, path]) => `<a href="${escapeHtml(url(req, path, { f: "html" }))}">${escapeHtml(label)}</a>`)
     .join(" / ");
   const links = options.links?.length ? `<h2>Links</h2>\n${linkList(options.links)}` : "";
-  const mapHead = options.map
-    ? `<link rel="stylesheet" href="/assets/maplibre-gl/maplibre-gl.css">\n<style>#map { height: 420px; }</style>\n`
-    : "";
+  const styles = [options.map ? "#map { height: 420px; }" : "", options.grid ? GRID_STYLE : ""].filter(Boolean);
+  const mapHead = [
+    options.map ? `<link rel="stylesheet" href="/assets/maplibre-gl/maplibre-gl.css">\n` : "",
+    styles.length ? `<style>\n${styles.join("\n")}\n</style>\n` : "",
+  ].join("");
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -51,13 +60,47 @@ export function linkList(links: readonly Link[]): string {
   return `<ul>\n${items.join("\n")}\n</ul>`;
 }
 
-/** A table of a feature's properties (values as JSON when they aren't strings). */
+/**
+ * A property value as table text: a string or number as it is, a list as its values separated by ", ", an empty
+ * list as `[]` (so it differs from a missing property, an empty cell), anything nested as compact JSON.
+ */
+export function cell(v: unknown): string {
+  if (v === undefined || v === null) return "";
+  if (Array.isArray(v)) {
+    if (v.length === 0) return "[]";
+    return v.map((x) => (x !== null && typeof x === "object" ? JSON.stringify(x) : String(x))).join(", ");
+  }
+  return typeof v === "object" ? JSON.stringify(v) : String(v);
+}
+
+/** A table of a feature's properties, one row each. */
 export function propertiesTable(properties: Record<string, unknown> | null): string {
   const rows = Object.entries(properties ?? {}).map(
-    ([k, v]) =>
-      `<tr><th>${escapeHtml(k)}</th><td>${escapeHtml(typeof v === "string" ? v : JSON.stringify(v))}</td></tr>`,
+    ([k, v]) => `<tr><th>${escapeHtml(k)}</th><td>${escapeHtml(cell(v))}</td></tr>`,
   );
-  return rows.length ? `<table>\n${rows.join("\n")}\n</table>` : "<p>No properties.</p>";
+  return rows.length
+    ? `<div class="scroll"><table class="grid">\n${rows.join("\n")}\n</table></div>`
+    : "<p>No properties.</p>";
+}
+
+/**
+ * The features as a table: `id` (linked to the feature's page), then one column per property. `columns` first, in
+ * their order, always (so every page of a collection has them), then any other property found on the features,
+ * alphabetically.
+ */
+export function featuresTable(
+  features: readonly { id: number; properties: Record<string, unknown> | null }[],
+  columns: readonly string[],
+  href: (id: number) => string,
+): string {
+  const found = new Set(features.flatMap((f) => Object.keys(f.properties ?? {})));
+  const names = [...columns, ...[...found].filter((n) => !columns.includes(n)).sort()];
+  const head = ["id", ...names].map((n) => `<th>${escapeHtml(n)}</th>`).join("");
+  const rows = features.map((f) => {
+    const cells = names.map((n) => `<td>${escapeHtml(cell(f.properties?.[n]))}</td>`).join("");
+    return `<tr><td><a href="${escapeHtml(href(f.id))}">${f.id}</a></td>${cells}</tr>`;
+  });
+  return `<div class="scroll"><table class="grid">\n<thead><tr>${head}</tr></thead>\n<tbody>\n${rows.join("\n")}\n</tbody>\n</table></div>`;
 }
 
 /**

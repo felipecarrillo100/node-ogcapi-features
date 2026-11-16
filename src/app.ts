@@ -11,6 +11,8 @@ import { collectionsRouter } from "./ogc/collections-routes.ts";
 import { itemsRouter } from "./ogc/items.ts";
 import { landingRouter, ogcConformanceRouter } from "./ogc/landing.ts";
 import { openApiRouter } from "./ogc/openapi.ts";
+import { schemasRouter } from "./ogc/schemas.ts";
+import { methodNotAllowedRouter, ogcBodyErrors, optionsRouter, writesRouter } from "./ogc/writes.ts";
 
 // MapLibre GL JS's files, served from this server (not a CDN) for the map on the HTML pages.
 const MAPLIBRE_DIST = path.dirname(createRequire(import.meta.url).resolve("maplibre-gl/package.json"));
@@ -20,6 +22,8 @@ export function createApp(pool: Pool): Express {
   const app = express();
   // Express 4's query parser (qs), which Express 5 no longer uses by default: query strings read as before.
   app.set("query parser", "extended");
+  // OPTIONS on the OGC API's resources: 200 with Allow (Part 4). Everywhere else, cors answers OPTIONS as before (204).
+  app.use(optionsRouter(cors({ optionsSuccessStatus: 200 })));
   app.use(cors());
   app.use(express.json());
 
@@ -36,6 +40,11 @@ export function createApp(pool: Pool): Express {
   app.use(openApiRouter());
   app.use(collectionsRouter(pool));
   app.use(itemsRouter(pool));
+  app.use(schemasRouter());
+  app.use(writesRouter(pool));
   app.use("/assets/maplibre-gl", express.static(path.join(MAPLIBRE_DIST, "dist"), { index: false }));
+  // After every OGC API route: a method a resource doesn't take is a 405 (with Allow); an unreadable body a 400.
+  app.use(methodNotAllowedRouter());
+  app.use(ogcBodyErrors);
   return app;
 }

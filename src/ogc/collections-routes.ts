@@ -8,6 +8,7 @@ import { mapScript, page } from "./html.ts";
 import { type Link, MEDIA, selfAndAlternate, url } from "./links.ts";
 import type { Format } from "./negotiate.ts";
 import { checkParams } from "./params.ts";
+import { REL } from "./schemas.ts";
 
 export const CRS84 = "http://www.opengis.net/def/crs/OGC/1.3/CRS84";
 const GREGORIAN = "http://www.opengis.net/def/uom/ISO-8601/0/Gregorian";
@@ -54,6 +55,24 @@ async function describe(pool: Pool, req: Request, c: Collection, links: Link[]):
         type: MEDIA.html,
         title: "The features, as HTML",
       },
+      ...(["queryables", "schema"] as const).flatMap((kind): Link[] => {
+        const what =
+          kind === "queryables" ? "The queryables (what a filter may use)" : "The schema (returnables and receivables)";
+        return [
+          {
+            href: url(req, `/collections/${c.id}/${kind}`, { f: "json" }),
+            rel: REL[kind],
+            type: MEDIA.schema,
+            title: `${what}, as JSON Schema`,
+          },
+          {
+            href: url(req, `/collections/${c.id}/${kind}`, { f: "html" }),
+            rel: REL[kind],
+            type: MEDIA.html,
+            title: `${what}, as HTML`,
+          },
+        ];
+      }),
     ],
     extent,
     itemType: "feature",

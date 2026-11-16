@@ -112,14 +112,18 @@ describe("GET /features", () => {
     expect((body as unknown as { error: string }).error).toMatch(/^Invalid filter: /);
   });
 
-  it("filter: refuses a class the server doesn't declare (needs-conformance)", async () => {
-    const filter = { op: ">", args: [{ op: "+", args: [{ property: "name" }, 1] }, 2] };
-    const { status, body } = await features(filterQuery(filter));
+  it("filter: Arithmetic and Temporal Functions run (declared since OGC API Phase 2)", async () => {
+    // Arithmetic on a string is NULL in CQL2: nothing selected, not an error.
+    const arithmetic = { op: ">", args: [{ op: "+", args: [{ property: "name" }, 1] }, 2] };
+    expect(await features(filterQuery(arithmetic))).toMatchObject({ status: 200, body: { features: [] } });
+    const temporal = { op: "t_after", args: [{ property: "name" }, { date: "2024-01-01" }] };
+    expect((await features(filterQuery(temporal))).status).toBe(200);
+  });
+
+  it("filter: refuses a custom function (the Functions class, not declared)", async () => {
+    const { status, body } = await features(filterQuery({ op: "myfn", args: [{ property: "name" }] }));
     expect(status).toBe(400);
-    expect(body).toEqual({
-      error: "Invalid filter: this server doesn't support http://www.opengis.net/spec/cql2/1.0/conf/arithmetic",
-      code: "needs-conformance",
-    });
+    expect(body).toMatchObject({ code: "invalid-filter" });
   });
 });
 

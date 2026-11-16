@@ -1,7 +1,8 @@
 import type { Request } from "express";
 import { Router } from "express";
 import swaggerUi from "swagger-ui-express";
-import { COLLECTIONS } from "./collections.ts";
+import { COLLECTIONS, simpleQueryables } from "./collections.ts";
+import { CRS84 } from "./filter.ts";
 import { ogc, sendHtml } from "./handler.ts";
 import { DESCRIPTION, TITLE } from "./landing.ts";
 import { baseUrl, MEDIA } from "./links.ts";
@@ -21,6 +22,25 @@ const errors = (...statuses: (400 | 404)[]) => ({
   ),
   "500": ref("responses", "ServerError"),
 });
+
+/** A POST / PUT body: a GeoJSON Feature, as `application/geo+json` or `application/json`. */
+const featureBody = {
+  required: true,
+  content: {
+    [MEDIA.geojson]: { schema: ref("schemas", "featureGeoJSON") },
+    [MEDIA.json]: { schema: ref("schemas", "featureGeoJSON") },
+  },
+};
+
+/** The errors of a write: 400 (the body doesn't fit the schema), 404 (`item`: no such feature), 415, 500. */
+const writeErrors = (item: boolean) => ({
+  "400": ref("responses", "InvalidBody"),
+  ...(item ? { "404": ref("responses", "NotFound") } : {}),
+  "415": ref("responses", "UnsupportedMediaType"),
+  "500": ref("responses", "ServerError"),
+});
+
+const schemaLink = (c: { id: string }) => `the collection's schema (\`/collections/${c.id}/schema\`)`;
 
 /**
  * The OpenAPI 3.0 document of the OGC API, generated from the collections config: one path per collection (as
@@ -99,10 +119,37 @@ export function openApiDocument(req: Request): Record<string, unknown> {
           ? "`datetime` selects by the `departure` instant; a feature without one is left out."
           : "This collection has no temporal property: `datetime` is accepted and selects every feature.",
         operationId: `getFeatures_${c.id}`,
-        parameters: ["f", "limit", "offset", "bbox", "datetime"].map((p) => ref("parameters", p)),
+        parameters: [
+          ...["f", "limit", "offset", "bbox", "datetime", "filter", "filter-lang", "filter-crs"].map((p) =>
+            ref("parameters", p),
+          ),
+          // Part 3, Queryables as Query Parameters: each simple queryable, with its own schema.
+          ...simpleQueryables(c).map(([name, q]) => ({
+            name,
+            in: "query",
+            description: `The features whose ${name} equals this value.`,
+            required: false,
+            schema: { type: q.type },
+          })),
+        ],
         responses: {
           "200": ok("A page of the features, as GeoJSON", MEDIA.geojson, "featureCollectionGeoJSON"),
           ...errors(400, 404),
+        },
+      },
+      // Part 4: create.
+      post: {
+        tags: [tag],
+        summary: `Add a feature to ${c.title}`,
+        description: `The body is a GeoJSON Feature (CRS84) whose properties fit ${schemaLink(c)}; the server assigns the id.`,
+        operationId: `createFeature_${c.id}`,
+        requestBody: featureBody,
+        responses: {
+          "201": {
+            description: "Created; no body",
+            headers: { Location: { description: "The new feature's URI", schema: { type: "string", format: "uri" } } },
+          },
+          ...writeErrors(false),
         },
       },
     };
@@ -114,7 +161,63 @@ export function openApiDocument(req: Request): Record<string, unknown> {
         parameters: [ref("parameters", "featureId"), ref("parameters", "f")],
         responses: { "200": ok("The feature, as GeoJSON", MEDIA.geojson, "featureGeoJSON"), ...errors(400, 404) },
       },
+      // Part 4: replace, update, delete.
+      put: {
+        tags: [tag],
+        summary: `Replace a feature of ${c.title}`,
+        description: `The body is the whole feature, as for POST; an \`id\` in it is ignored (the path names the feature). There is no create-on-PUT: an unknown id is a 404.`,
+        operationId: `replaceFeature_${c.id}`,
+        parameters: [ref("parameters", "featureId")],
+        requestBody: featureBody,
+        responses: { "204": { description: "Replaced; no body" }, ...writeErrors(true) },
+      },
+      patch: {
+        tags: [tag],
+        summary: `Update some properties of a feature of ${c.title}`,
+        description:
+          `A JSON Merge Patch (RFC 7396) on the feature as ${schemaLink(c)} describes it, every property flat ` +
+          '(`{ "lanes": 3, "geometry": {…} }`); a GeoJSON-shaped patch (`{ "properties": {…} }`) is read as that. ' +
+          "`null` unsets a property; a geometry replaces the geometry; the id can't change.",
+        operationId: `updateFeature_${c.id}`,
+        parameters: [ref("parameters", "featureId")],
+        requestBody: {
+          required: true,
+          content: { "application/merge-patch+json": { schema: { type: "object" } } },
+        },
+        responses: { "204": { description: "Updated; no body" }, ...writeErrors(true) },
+      },
+      delete: {
+        tags: [tag],
+        summary: `Delete a feature of ${c.title}`,
+        operationId: `deleteFeature_${c.id}`,
+        parameters: [ref("parameters", "featureId")],
+        responses: {
+          "204": { description: "Deleted; no body" },
+          "404": ref("responses", "NotFound"),
+          "500": ref("responses", "ServerError"),
+        },
+      },
     };
+    for (const [kind, summary] of [
+      ["queryables", `The properties a filter on ${c.title} may use (Part 3)`],
+      ["schema", `The schema of ${c.title}'s features: returnables and receivables (Part 5)`],
+    ] as const) {
+      paths[`/collections/${c.id}/${kind}`] = {
+        get: {
+          tags: [tag],
+          summary,
+          operationId: `get${kind === "queryables" ? "Queryables" : "Schema"}_${c.id}`,
+          parameters: [ref("parameters", "f")],
+          responses: {
+            "200": {
+              description: "A JSON Schema (2020-12), or its HTML table",
+              content: { [MEDIA.schema]: { schema: { type: "object" } }, [MEDIA.html]: { schema: { type: "string" } } },
+            },
+            ...errors(400, 404),
+          },
+        },
+      };
+    }
   }
 
   return {
@@ -156,7 +259,7 @@ const PARAMETERS = {
     in: "query",
     description:
       "The features that intersect the box: minimum longitude, latitude, maximum longitude, latitude (CRS84); 6 " +
-      "numbers carry heights, which are ignored. West above east crosses the antimeridian.",
+      "numbers carry heights (the features here are 2D). West above east crosses the antimeridian. Compared as CQL2 S_INTERSECTS.",
     required: false,
     style: "form",
     explode: false,
@@ -179,6 +282,29 @@ const PARAMETERS = {
     description: "The feature's id",
     required: true,
     schema: { type: "string" },
+  },
+  filter: {
+    name: "filter",
+    in: "query",
+    description:
+      "A CQL2 filter (OGC 21-065r2) on the collection's queryables, in the language `filter-lang` names. Combines " +
+      "with `bbox`, `datetime` and the queryable parameters by AND.",
+    required: false,
+    schema: { type: "string" },
+  },
+  "filter-lang": {
+    name: "filter-lang",
+    in: "query",
+    description: "The language of `filter`.",
+    required: false,
+    schema: { type: "string", enum: ["cql2-text", "cql2-json"], default: "cql2-text" },
+  },
+  "filter-crs": {
+    name: "filter-crs",
+    in: "query",
+    description: "The CRS of the geometries in `filter`.",
+    required: false,
+    schema: { type: "string", format: "uri", enum: [CRS84], default: CRS84 },
   },
 };
 
@@ -302,6 +428,10 @@ const exceptionResponse = (description: string) => ({
 const RESPONSES = {
   InvalidParameter: exceptionResponse("A query parameter is unknown, given twice, or has an invalid value"),
   NotFound: exceptionResponse("No such collection or feature"),
+  InvalidBody: exceptionResponse(
+    "The body isn't valid JSON, isn't a Feature (or a patch), or doesn't fit the collection's schema; or a Content-Crs other than CRS84",
+  ),
+  UnsupportedMediaType: exceptionResponse("The body's Content-Type isn't one this operation takes"),
   ServerError: exceptionResponse("A server error"),
 };
 

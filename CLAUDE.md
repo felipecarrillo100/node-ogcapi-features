@@ -28,7 +28,8 @@ its e2e spec `demo-react/e2e/specs/95-filters.spec.ts`. They call:
 - `GET /features` with `bbox=` and `filter=<CQL2-JSON>`, and `GET/POST/PUT/DELETE /features[/:id]`;
 - `GET /conformance`, which must keep listing these CQL2 class URIs: basic-cql2, advanced-comparison-operators,
   case-insensitive-comparison, accent-insensitive-comparison, property-property, array-functions,
-  basic-spatial-functions, basic-spatial-functions-plus, spatial-functions. Not temporal-functions, not arithmetic;
+  basic-spatial-functions, basic-spatial-functions-plus, spatial-functions, first and in this order. Since
+  2026-11-16 (the owner's decision) also temporal-functions and arithmetic, then the OGC API classes;
 - `GET /features/queryables` (OGC Part 3 form);
 - `GET/PUT /features/:id/details`, `GET/PUT /tile-features/:id/maintenance`.
 
