@@ -1,0 +1,50 @@
+{
+  "name": "node-ogcapi-features",
+  "version": "1.0.0",
+  "private": true,
+  "description": "A lightweight, standards-compliant OGC API - Features server implementation for Node.js, with a plain REST API beside it on the same PostGIS data.",
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "dev": "node --watch src/server.ts",
+    "build": "tsc -p tsconfig.build.json",
+    "start": "npm run build && node dist/server.js",
+    "typecheck": "tsc",
+    "lint": "biome check .",
+    "format": "biome check --write .",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "check": "npm run typecheck && npm run lint && npm test"
+  },
+  "dependencies": {
+    "cors": "^2.8.6",
+    "express": "^5.3.0",
+    "maplibre-gl": "^6.18.0",
+    "ogc-cql2": "^1.6.2",
+    "pg": "^8.23.1",
+    "swagger-ui-express": "^5.0.1"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.6.8",
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.6",
+    "@types/geojson": "^7946.0.16",
+    "@types/node": "^24.19.2",
+    "@types/pg": "^8.23.1",
+    "@types/swagger-ui-express": "^4.1.8",
+    "@vitest/coverage-v8": "^5.1.0",
+    "typescript": "^7.0.2",
+    "vitest": "^5.1.0"
+  },
+  "homepage": "https://github.com/felipecarrillo100/node-ogcapi-features#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/felipecarrillo100/node-ogcapi-features.git"
+  },
+  "bugs": {
+    "url": "https://github.com/felipecarrillo100/node-ogcapi-features/issues"
+  }
+}

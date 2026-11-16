@@ -1,0 +1,29 @@
+# Dependencies
+node_modules/
+
+# Build output (npm run build) and test coverage (npm run test:coverage)
+dist/
+coverage/
+*.tsbuildinfo
+
+# Logs
+*.log
+npm-debug.log*
+
+# Local environment overrides (PORT, PG*): never commit credentials
+.env
+.env.*
+
+# Editors
+.idea/
+.vscode/
+*.swp
+*~
+
+# macOS
+.DS_Store
+._*
+.AppleDouble
+.LSOverride
+.Spotlight-V100
+.Trashes
