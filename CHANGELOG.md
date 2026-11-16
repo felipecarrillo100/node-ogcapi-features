@@ -145,12 +145,20 @@ versions follow [Semantic Versioning](https://semver.org/).
   - The routes are split by concern: `features/`, `conformance.ts`, `details.ts`, `maintenance.ts`, and `ogc/` for
     the OGC API; `app.ts` builds the app and `server.ts` starts it.
 
+### Fixed
+- 2026-11-17, report 2 (`request/2-bbox-crs-4326-antimeridian.md`): a `bbox` with `bbox-crs` EPSG:4326 across the
+  antimeridian (`-40,170,-30,-170`) answered 400 "its south is above its north".
+  - The cause: `parseBbox` read every box longitude first, whatever its CRS (since Phase 4).
+  - The fix: its south/north check is gone, and ogc-cql2 checks the box in its own CRS. The ogc-cql2 team confirmed
+    that no change is needed in the package.
+  - A south above its north is still a 400 in every CRS. The message now names the parameter as sent:
+    `Invalid bbox "-36,170,-37,175": A bbox's south (-36) is above its north (-37). …`.
+- Checks: 182 tests (the same antimeridian box in CRS84 and EPSG:4326, through `bbox` and `filter-crs`, equal to
+  `evaluate`).
+
 ### Known
 - `bbox` with three numbers isn't refused on the REST API's `GET /restapi/features` (200, no features), as before;
   `/restapi/routes` refuses it.
-- `bbox` with `bbox-crs` EPSG:4326 across the antimeridian (`-40,170,-30,-170`) answers 400 "its south is above its
-  north": `parseBbox` reads the box longitude first whatever its CRS (since Phase 4). The same box as a `filter-crs`
-  literal works.
 - ogc-cql2's `SqlColumn` type (1.7.0 still) rejects `type: "array"`; the queryables are cast (`src/features/routes.ts`).
 - TEAM Engine 1.9 sends EPSG:4326 `bbox-crs` boxes longitude first (2 failures; since ogc-cql2 1.7.0 a 400, its
   "latitude" beyond ±90). The server follows EPSG:4326's latitude-first order (Part 2).

@@ -320,7 +320,10 @@ describe("filter-crs: a filter's geometries in another CRS", () => {
       [{ filter: "S_INTERSECTS(geometry, POINT(0 -20100000))", "filter-crs": EPSG3857 }, /y -20100000 is outside/],
       [{ filter: "S_INTERSECTS(geometry, POINT(95 4))", "filter-crs": EPSG4326 }, /latitude 95 is outside/],
       [{ filter: "S_INTERSECTS(geometry, POINT(50 181))", "filter-crs": EPSG4326 }, /longitude 181 is outside/],
-      [{ bbox: "-20100000,0,0,1000", "bbox-crs": EPSG3857 }, /Invalid bbox: x -20100000 is outside/],
+      [
+        { bbox: "-20100000,0,0,1000", "bbox-crs": EPSG3857 },
+        /^Invalid bbox "-20100000,0,0,1000": x -20100000 is outside/,
+      ],
       [
         {
           filter: JSON.stringify({
@@ -347,6 +350,59 @@ describe("filter-crs: a filter's geometries in another CRS", () => {
     expect(
       (await items("routes", { filter: "S_INTERSECTS(geometry, POINT(-90 180))", "filter-crs": EPSG4326 })).status,
     ).toBe(200);
+  });
+
+  // Report 2 (request/2-bbox-crs-4326-antimeridian.md): parseBbox read every box longitude first, so an EPSG:4326 box
+  // across the antimeridian was refused as "south above north". ogc-cql2 now checks the box, in its own CRS.
+  it("a box across the antimeridian selects the same features in CRS84 and EPSG:4326, as bbox and as filter", async () => {
+    const boxes: [string, number[]][] = [
+      // Route 6 (Sydney–Auckland) past 170° E; Tokyo to New York over the Pacific, for features.
+      ["routes", [170, -40, -170, -30]],
+      ["features", [130, -50, -60, 50]],
+    ];
+    for (const [collection, [w, s, e, n]] of boxes) {
+      const all = (await items(collection)).body.features;
+      const filter = { op: "s_intersects", args: [{ property: "geometry" }, { bbox: [w, s, e, n] }] };
+      const map = all.filter((f) => evaluate(filter as unknown as Cql2Filter, f) === true).map((f) => f.id);
+      expect(map.length, collection).toBeGreaterThan(0);
+      const ways: [string, Record<string, string>][] = [
+        ["bbox CRS84", { bbox: `${w},${s},${e},${n}` }],
+        ["bbox 4326", { bbox: `${s},${w},${n},${e}`, "bbox-crs": EPSG4326 }],
+        ["bbox 4326, 6 numbers", { bbox: `${s},${w},0,${n},${e},100`, "bbox-crs": EPSG4326 }],
+        ["filter CRS84", { filter: `S_INTERSECTS(geometry, BBOX(${w}, ${s}, ${e}, ${n}))` }],
+        [
+          "filter-crs 4326 text",
+          { filter: `S_INTERSECTS(geometry, BBOX(${s}, ${w}, ${n}, ${e}))`, "filter-crs": EPSG4326 },
+        ],
+        [
+          "filter-crs 4326 json",
+          {
+            filter: JSON.stringify({ op: "s_intersects", args: [{ property: "geometry" }, { bbox: [s, w, n, e] }] }),
+            "filter-lang": "cql2-json",
+            "filter-crs": EPSG4326,
+          },
+        ],
+      ];
+      for (const [way, query] of ways) {
+        const res = await items(collection, query);
+        expect(res.status, `${collection} ${way}`).toBe(200);
+        expect(ids(res.body), `${collection} ${way}`).toEqual(map);
+      }
+    }
+  });
+
+  it("a box whose south is above its north is refused in CRS84 and EPSG:4326, the message naming the bbox", async () => {
+    const queries: Record<string, string>[] = [
+      { bbox: "170,-36,175,-37" },
+      { bbox: "-36,170,-37,175", "bbox-crs": EPSG4326 },
+    ];
+    for (const query of queries) {
+      const res = await items("routes", query);
+      expect(res.status, query.bbox).toBe(400);
+      expect((res.body as unknown as { description: string }).description).toMatch(
+        new RegExp(`^Invalid bbox "${query.bbox}": A bbox's south \\(-3[67]\\) is above its north`),
+      );
+    }
   });
 
   it("a backwards box in EPSG:3857 is refused: only a geographic CRS crosses the antimeridian", async () => {

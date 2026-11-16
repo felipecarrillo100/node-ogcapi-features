@@ -31,7 +31,11 @@ function itemsWhere(req: Request, c: Collection): Where {
   // bbox-crs (Part 2): the box's numbers in that CRS, which toSql transforms to CRS84 (ogc-cql2's `literals`).
   const bboxCrs = crsParam(req, "bbox-crs");
   const bbox = parseBbox(req);
-  if (bbox) addFilter(where, c, { op: "s_intersects", args: [{ property: GEOMETRY }, { bbox }] }, "bbox", bboxCrs);
+  if (bbox) {
+    // The message names the parameter as sent: `Invalid bbox "…": ` and ogc-cql2's explanation.
+    const label = `bbox "${String(req.query.bbox)}"`;
+    addFilter(where, c, { op: "s_intersects", args: [{ property: GEOMETRY }, { bbox }] }, label, bboxCrs);
+  }
   const datetime = datetimeLiteral(req);
   // Without an instant (features), datetime selects every feature (Part 1).
   if (datetime && c.instant) {

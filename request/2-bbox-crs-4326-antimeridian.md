@@ -7,7 +7,7 @@
 | Since | OGC API Phase 4 (`bbox-crs`, 2026-11-16) |
 | Found | 2026-11-17, while integrating ogc-cql2 1.7.0 |
 | Kind | Bug: a valid request answers 400 |
-| Status | Open, not fixed |
+| Status | **Fixed 2026-11-17.** The ogc-cql2 team confirmed it: no change is needed in the package; they agreed with option 1 of section 5. After the fix, row 2 answers 200 with route 6; rows 5 and 6 answer 400 `Invalid bbox "…": A bbox's south … is above its north …` |
 
 ## 1. Description
 

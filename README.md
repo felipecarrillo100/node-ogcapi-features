@@ -266,9 +266,8 @@ CRS (Part 2), the same on both collections:
 - A coordinate outside the CRS's area of use answers 400, because PostGIS would silently wrap it around the world:
   - EPSG:3857: x within ±20037508.34 m, y within ±20048966.1 m;
   - EPSG:4326: latitude within ±90, longitude within ±180.
-- A box running backwards (minimum above maximum) crosses the antimeridian in CRS84, and in EPSG:4326 in a filter. In
-  EPSG:3857 it answers 400. A `bbox` with `bbox-crs` EPSG:4326 across the antimeridian is refused (400, "its south is
-  above its north"): a known bug, see the CHANGELOG.
+- A box whose west is above its east crosses the antimeridian in CRS84 and EPSG:4326, for `bbox` and filters alike. In
+  EPSG:3857 it answers 400. A south above its north answers 400 in every CRS. ogc-cql2 checks the box in its own CRS.
 - `Content-Crs` on POST / PUT / PATCH: the body's geometry is read in that CRS and stored in the column's own. A
   `routes` feature sent in EPSG:3857 is stored exactly as sent.
 - An unknown `crs`, `bbox-crs`, `filter-crs` or `Content-Crs` answers 400.

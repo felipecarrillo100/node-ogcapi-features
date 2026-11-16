@@ -41,8 +41,9 @@ export function parseOffset(req: Request): number {
 }
 
 /**
- * `bbox`: 4 numbers, or 6 with heights, in CRS84, as a CQL2 BBOX literal takes them. West above east crosses the
- * antimeridian.
+ * `bbox`: 4 numbers, or 6 with heights, in its CRS's axis order (`bbox-crs`), as a CQL2 BBOX literal takes them. Its
+ * corners are checked by ogc-cql2 in that CRS (`addFilter`): a south above its north is refused; a west above its east
+ * crosses the antimeridian in CRS84 and EPSG:4326, and is refused in EPSG:3857.
  */
 export function parseBbox(req: Request): number[] | undefined {
   const value = param(req, "bbox");
@@ -51,8 +52,6 @@ export function parseBbox(req: Request): number[] | undefined {
   if ((n.length !== 4 && n.length !== 6) || n.some((x) => !Number.isFinite(x))) {
     throw badRequest(`Invalid bbox "${value}": 4 or 6 numbers, comma-separated`);
   }
-  const [south, north] = n.length === 4 ? [n[1], n[3]] : [n[1], n[4]];
-  if ((south as number) > (north as number)) throw badRequest(`Invalid bbox "${value}": its south is above its north`);
   return n;
 }
 
