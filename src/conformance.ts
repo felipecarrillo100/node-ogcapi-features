@@ -24,9 +24,11 @@ const FEATURES_1 = "http://www.opengis.net/spec/ogcapi-features-1/1.0/conf";
 const FEATURES_3 = "http://www.opengis.net/spec/ogcapi-features-3/1.0/conf";
 const COMMON_3 = "http://www.opengis.net/spec/ogcapi-common-3/1.0/conf";
 const FEATURES_4 = "http://www.opengis.net/spec/ogcapi-features-4/1.0/conf";
+const FEATURES_2 = "http://www.opengis.net/spec/ogcapi-features-2/1.0/conf";
 
 // The OGC API classes (src/ogc/):
 // - Part 1 Core and its encodings;
+// - Part 2 CRS by Reference (CRS84, EPSG:4326, EPSG:3857);
 // - Part 3 Filtering, and CQL2's two encodings (which ogc-cql2's CONFORMANCE leaves out: they name an encoding);
 // - Part 5 Schemas (OGC API - Common - Part 3);
 // - Part 4 Create, Replace, Update, Delete (still a draft, 20-002r1): not its optimistic-locking classes.
@@ -35,6 +37,7 @@ const OGC_API_CLASSES = [
   `${FEATURES_1}/oas30`,
   `${FEATURES_1}/html`,
   `${FEATURES_1}/geojson`,
+  `${FEATURES_2}/crs`,
   `${FEATURES_3}/queryables`,
   `${FEATURES_3}/queryables-query-parameters`,
   `${FEATURES_3}/filter`,
@@ -50,16 +53,23 @@ const OGC_API_CLASSES = [
   `${FEATURES_4}/features`,
 ];
 
-/** Served at /conformance: the 9 CQL2 classes first, then the others. */
+/** Served at /conformance (the OGC API's): the 9 CQL2 classes first, then the others. */
 export const CONFORMS_TO: readonly string[] = [...CQL2_CLASSES, ...CQL2_MORE, ...OGC_API_CLASSES];
 
 /** The CQL2 classes a filter may use (what the OGC API validates filters against). */
 export const CQL2_DECLARED: readonly string[] = [...CQL2_CLASSES, ...CQL2_MORE];
 
+/**
+ * Served at /restapi/conformance (the REST API's): the CQL2 classes its filters may use, the 9 first and in order (as
+ * MapEvolution's REST layer reads them), then Temporal Functions and Arithmetic. No OGC API class: it isn't one.
+ */
+export const REST_CONFORMS_TO: readonly string[] = CQL2_DECLARED;
+
+/** `/conformance` of the REST API, mounted at /restapi. */
 export function conformanceRouter(): Router {
   const router = Router();
   router.get("/conformance", (_req, res) => {
-    res.json({ conformsTo: CONFORMS_TO });
+    res.json({ conformsTo: REST_CONFORMS_TO });
   });
   return router;
 }

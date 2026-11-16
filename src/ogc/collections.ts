@@ -101,7 +101,7 @@ export const COLLECTIONS: readonly Collection[] = [
     title: "Features",
     description:
       "Points, lines and polygons around the world, with text and list properties: lists in a jsonb column " +
-      "(services, zones, inspections) and as native arrays (tags, floors, visits). The same table as GET /features.",
+      "(services, zones, inspections) and as native arrays (tags, floors, visits). The same table as GET /restapi/features.",
     source: served(FILTERABLE, 4326),
     srid: 4326,
     // The jsonb properties as they are; the native lists as postgresValue serves them (the REST API keeps its own).

@@ -2,6 +2,7 @@ import type { Request } from "express";
 import { Router } from "express";
 import type { Pool } from "pg";
 import { COLLECTIONS, type Collection, collectionById, geometry84, utc } from "./collections.ts";
+import { CRS_LIST, CRS84, storageCrs } from "./crs.ts";
 import { escapeHtml, notFound } from "./errors.ts";
 import { ogc, sendHtml, sendJson } from "./handler.ts";
 import { mapScript, page } from "./html.ts";
@@ -10,7 +11,6 @@ import type { Format } from "./negotiate.ts";
 import { checkParams } from "./params.ts";
 import { REL } from "./schemas.ts";
 
-export const CRS84 = "http://www.opengis.net/def/crs/OGC/1.3/CRS84";
 const GREGORIAN = "http://www.opengis.net/def/uom/ISO-8601/0/Gregorian";
 
 interface ExtentRow {
@@ -23,7 +23,13 @@ interface ExtentRow {
 }
 
 /** A collection as `/collections` and `/collections/{id}` describe it (the same content, Part 1). */
-async function describe(pool: Pool, req: Request, c: Collection, links: Link[]): Promise<Record<string, unknown>> {
+async function describe(
+  pool: Pool,
+  req: Request,
+  c: Collection,
+  links: Link[],
+  inList = false,
+): Promise<Record<string, unknown>> {
   const time = c.temporal
     ? `${utc(`min(${c.temporal})`)} AS tmin, ${utc(`max(${c.temporal})`)} AS tmax`
     : "NULL AS tmin, NULL AS tmax";
@@ -35,7 +41,7 @@ async function describe(pool: Pool, req: Request, c: Collection, links: Link[]):
   );
   const r = rows[0] as ExtentRow;
   const bbox = r.xmin === null ? [-180, -90, 180, 90] : [r.xmin, r.ymin, r.xmax, r.ymax];
-  const extent: Record<string, unknown> = { spatial: { bbox: [bbox], crs: CRS84 } };
+  const extent: Record<string, unknown> = { spatial: { bbox: [bbox], crs: CRS84.uri } };
   if (c.temporal) extent.temporal = { interval: [[r.tmin, r.tmax]], trs: GREGORIAN };
   return {
     id: c.id,
@@ -76,7 +82,9 @@ async function describe(pool: Pool, req: Request, c: Collection, links: Link[]):
     ],
     extent,
     itemType: "feature",
-    crs: [CRS84],
+    // In /collections, a pointer to its global list (Part 2 Req 5); alone, the list itself.
+    crs: inList ? ["#/crs"] : CRS_LIST.map((x) => x.uri),
+    storageCrs: storageCrs(c.srid).uri,
   };
 }
 
@@ -103,9 +111,11 @@ export function collectionsRouter(pool: Pool): Router {
     "/collections",
     ogc(async (req, res, f: Format) => {
       checkParams(req, ["f"]);
-      const collections = await Promise.all(COLLECTIONS.map((c) => describe(pool, req, c, collectionLinks(req, c))));
+      const collections = await Promise.all(
+        COLLECTIONS.map((c) => describe(pool, req, c, collectionLinks(req, c), true)),
+      );
       const links = selfAndAlternate(req, f, MEDIA.json);
-      if (f === "json") return sendJson(res, MEDIA.json, { links, collections });
+      if (f === "json") return sendJson(res, MEDIA.json, { links, crs: CRS_LIST.map((x) => x.uri), collections });
       const list = collections
         .map(
           (c) =>

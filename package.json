@@ -23,7 +23,7 @@
     "cors": "^2.8.6",
     "express": "^5.3.0",
     "maplibre-gl": "^6.18.0",
-    "ogc-cql2": "^1.6.2",
+    "ogc-cql2": "^1.7.0",
     "pg": "^8.23.1",
     "swagger-ui-express": "^5.0.1"
   },

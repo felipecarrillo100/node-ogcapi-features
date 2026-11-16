@@ -121,7 +121,11 @@ describe("collections", () => {
         trs: "http://www.opengis.net/def/uom/ISO-8601/0/Gregorian",
       },
     });
-    expect(routes).toMatchObject({ itemType: "feature", crs: [CRS84] });
+    expect(routes).toMatchObject({
+      itemType: "feature",
+      crs: ["#/crs"],
+      storageCrs: "http://www.opengis.net/def/crs/EPSG/0/3857",
+    });
     expect(rels(routes.links as Link[])).toEqual([
       "self application/json",
       "alternate text/html",
@@ -137,9 +141,15 @@ describe("collections", () => {
   it("/collections/{id}: the same description as in the list; 404 for another id", async () => {
     const list = await request<{ collections: Record<string, unknown>[] }>(`${server.url}/collections`);
     const one = await request<Record<string, unknown>>(`${server.url}/collections/routes`);
-    const { links: _a, ...fromList } = list.body.collections[1] as Record<string, unknown>;
-    const { links: _b, ...alone } = one.body;
+    const { links: _a, crs: _c, ...fromList } = list.body.collections[1] as Record<string, unknown>;
+    const { links: _b, crs: crsList, ...alone } = one.body;
     expect(alone).toEqual(fromList);
+    // In the list a collection points to the global crs list (Part 2 Req 5); alone, it lists them.
+    expect(crsList).toEqual([
+      "http://www.opengis.net/def/crs/OGC/1.3/CRS84",
+      "http://www.opengis.net/def/crs/EPSG/0/4326",
+      "http://www.opengis.net/def/crs/EPSG/0/3857",
+    ]);
     expect(await request(`${server.url}/collections/nope`)).toMatchObject({ status: 404, body: { code: "NotFound" } });
   });
 });
@@ -346,7 +356,7 @@ describe("one item", () => {
 
   it("serves the features collection's properties as GET /features/:id does", async () => {
     const ogc = await request<Item>(`${server.url}/collections/features/items/7`);
-    const rest = await request<Feature>(`${server.url}/features/7`);
+    const rest = await request<Feature>(`${server.url}/restapi/features/7`);
     const { links: _l, ...feature } = ogc.body;
     expect(feature).toEqual(rest.body);
   });

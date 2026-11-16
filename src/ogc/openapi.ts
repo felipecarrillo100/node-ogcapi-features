@@ -2,7 +2,7 @@ import type { Request } from "express";
 import { Router } from "express";
 import swaggerUi from "swagger-ui-express";
 import { COLLECTIONS, simpleQueryables } from "./collections.ts";
-import { CRS84 } from "./filter.ts";
+import { CRS_LIST, CRS84 } from "./crs.ts";
 import { ogc, sendHtml } from "./handler.ts";
 import { DESCRIPTION, TITLE } from "./landing.ts";
 import { baseUrl, MEDIA } from "./links.ts";
@@ -11,6 +11,18 @@ import { checkParams, LIMIT } from "./params.ts";
 const ref = (kind: "parameters" | "schemas" | "responses", name: string) => ({ $ref: `#/components/${kind}/${name}` });
 
 /** A 200 in JSON (`type`, with `schema`) and HTML. */
+/** The `Content-Crs` header of a GeoJSON answer (Part 2). */
+const contentCrsHeader = {
+  "Content-Crs": { description: "The CRS of the geometries, as `<uri>`", schema: { type: "string" } },
+};
+
+/** A 200 of features (GeoJSON, with `Content-Crs`) and HTML. */
+const okFeatures = (description: string, schema: string) => ({
+  description,
+  headers: contentCrsHeader,
+  content: { [MEDIA.geojson]: { schema: ref("schemas", schema) }, [MEDIA.html]: { schema: { type: "string" } } },
+});
+
 const ok = (description: string, type: string, schema: string) => ({
   description,
   content: { [type]: { schema: ref("schemas", schema) }, [MEDIA.html]: { schema: { type: "string" } } },
@@ -120,8 +132,8 @@ export function openApiDocument(req: Request): Record<string, unknown> {
           : "This collection has no temporal property: `datetime` is accepted and selects every feature.",
         operationId: `getFeatures_${c.id}`,
         parameters: [
-          ...["f", "limit", "offset", "bbox", "datetime", "filter", "filter-lang", "filter-crs"].map((p) =>
-            ref("parameters", p),
+          ...["f", "limit", "offset", "bbox", "bbox-crs", "crs", "datetime", "filter", "filter-lang", "filter-crs"].map(
+            (p) => ref("parameters", p),
           ),
           // Part 3, Queryables as Query Parameters: each simple queryable, with its own schema.
           ...simpleQueryables(c).map(([name, q]) => ({
@@ -133,7 +145,7 @@ export function openApiDocument(req: Request): Record<string, unknown> {
           })),
         ],
         responses: {
-          "200": ok("A page of the features, as GeoJSON", MEDIA.geojson, "featureCollectionGeoJSON"),
+          "200": okFeatures("A page of the features, as GeoJSON", "featureCollectionGeoJSON"),
           ...errors(400, 404),
         },
       },
@@ -141,8 +153,9 @@ export function openApiDocument(req: Request): Record<string, unknown> {
       post: {
         tags: [tag],
         summary: `Add a feature to ${c.title}`,
-        description: `The body is a GeoJSON Feature (CRS84) whose properties fit ${schemaLink(c)}; the server assigns the id.`,
+        description: `The body is a GeoJSON Feature (in CRS84, or the CRS its Content-Crs header names) whose properties fit ${schemaLink(c)}; the server assigns the id.`,
         operationId: `createFeature_${c.id}`,
+        parameters: [ref("parameters", "Content-Crs")],
         requestBody: featureBody,
         responses: {
           "201": {
@@ -158,8 +171,8 @@ export function openApiDocument(req: Request): Record<string, unknown> {
         tags: [tag],
         summary: `A feature of ${c.title}`,
         operationId: `getFeature_${c.id}`,
-        parameters: [ref("parameters", "featureId"), ref("parameters", "f")],
-        responses: { "200": ok("The feature, as GeoJSON", MEDIA.geojson, "featureGeoJSON"), ...errors(400, 404) },
+        parameters: [ref("parameters", "featureId"), ref("parameters", "f"), ref("parameters", "crs")],
+        responses: { "200": okFeatures("The feature, as GeoJSON", "featureGeoJSON"), ...errors(400, 404) },
       },
       // Part 4: replace, update, delete.
       put: {
@@ -167,7 +180,7 @@ export function openApiDocument(req: Request): Record<string, unknown> {
         summary: `Replace a feature of ${c.title}`,
         description: `The body is the whole feature, as for POST; an \`id\` in it is ignored (the path names the feature). There is no create-on-PUT: an unknown id is a 404.`,
         operationId: `replaceFeature_${c.id}`,
-        parameters: [ref("parameters", "featureId")],
+        parameters: [ref("parameters", "featureId"), ref("parameters", "Content-Crs")],
         requestBody: featureBody,
         responses: { "204": { description: "Replaced; no body" }, ...writeErrors(true) },
       },
@@ -179,7 +192,7 @@ export function openApiDocument(req: Request): Record<string, unknown> {
           '(`{ "lanes": 3, "geometry": {…} }`); a GeoJSON-shaped patch (`{ "properties": {…} }`) is read as that. ' +
           "`null` unsets a property; a geometry replaces the geometry; the id can't change.",
         operationId: `updateFeature_${c.id}`,
-        parameters: [ref("parameters", "featureId")],
+        parameters: [ref("parameters", "featureId"), ref("parameters", "Content-Crs")],
         requestBody: {
           required: true,
           content: { "application/merge-patch+json": { schema: { type: "object" } } },
@@ -229,6 +242,8 @@ export function openApiDocument(req: Request): Record<string, unknown> {
     components: { parameters: PARAMETERS, schemas: SCHEMAS, responses: RESPONSES },
   };
 }
+
+const crsSchema = { type: "string", format: "uri", enum: CRS_LIST.map((c) => c.uri), default: CRS84.uri };
 
 const PARAMETERS = {
   f: {
@@ -299,12 +314,34 @@ const PARAMETERS = {
     required: false,
     schema: { type: "string", enum: ["cql2-text", "cql2-json"], default: "cql2-text" },
   },
+  crs: {
+    name: "crs",
+    in: "query",
+    description: "The CRS of the answer's geometries (Part 2); EPSG:4326 is latitude, longitude.",
+    required: false,
+    schema: crsSchema,
+  },
+  "bbox-crs": {
+    name: "bbox-crs",
+    in: "query",
+    description:
+      "The CRS of `bbox`'s numbers (Part 2); EPSG:4326 is minimum latitude, longitude, maximum latitude, longitude.",
+    required: false,
+    schema: crsSchema,
+  },
+  "Content-Crs": {
+    name: "Content-Crs",
+    in: "header",
+    description: "The CRS of the body's geometry, as `<uri>` (Part 4 with Part 2); CRS84 when absent.",
+    required: false,
+    schema: { type: "string", enum: CRS_LIST.map((c) => `<${c.uri}>`) },
+  },
   "filter-crs": {
     name: "filter-crs",
     in: "query",
     description: "The CRS of the geometries in `filter`.",
     required: false,
-    schema: { type: "string", format: "uri", enum: [CRS84], default: CRS84 },
+    schema: crsSchema,
   },
 };
 

@@ -6,9 +6,10 @@ const server = useServer();
 
 const ids = (collection: FeatureCollection) =>
   collection.features.map((f) => f.id).sort((a, b) => Number(a) - Number(b));
-const features = (query = "") => request<FeatureCollection>(`${server.url}/features${query ? `?${query}` : ""}`);
+const features = (query = "") =>
+  request<FeatureCollection>(`${server.url}/restapi/features${query ? `?${query}` : ""}`);
 
-describe("GET /features", () => {
+describe("GET /restapi/features", () => {
   it("answers every feature as a GeoJSON FeatureCollection", async () => {
     const { status, contentType, body } = await features();
     expect(status).toBe(200);
@@ -127,9 +128,9 @@ describe("GET /features", () => {
   });
 });
 
-describe("GET /features/queryables", () => {
+describe("GET /restapi/features/queryables", () => {
   it("answers the Part 3 form, without the server's own sqlType and column", async () => {
-    const { status, body } = await request(`${server.url}/features/queryables`);
+    const { status, body } = await request(`${server.url}/restapi/features/queryables`);
     expect(status).toBe(200);
     expect(body).toEqual({
       $schema: "https://json-schema.org/draft/2020-12/schema",
@@ -148,9 +149,9 @@ describe("GET /features/queryables", () => {
   });
 });
 
-describe("/features/:id CRUD", () => {
+describe("/restapi/features/:id CRUD", () => {
   it("GET: one feature, or 404", async () => {
-    const found = await request<Feature>(`${server.url}/features/12`);
+    const found = await request<Feature>(`${server.url}/restapi/features/12`);
     expect(found.status).toBe(200);
     expect(found.body).toEqual({
       type: "Feature",
@@ -158,13 +159,13 @@ describe("/features/:id CRUD", () => {
       properties: { name: "Rio de Janeiro" },
       geometry: { type: "Point", coordinates: [-43.2, -22.9] },
     });
-    const missing = await request(`${server.url}/features/999999`);
+    const missing = await request(`${server.url}/restapi/features/999999`);
     expect(missing.status).toBe(404);
     expect(missing.body).toEqual({ error: "Feature 999999 not found" });
   });
 
   it("POST, PUT, DELETE: the native lists go to their columns and come back in the properties", async () => {
-    const created = await send<Feature>(`${server.url}/features`, "POST", {
+    const created = await send<Feature>(`${server.url}/restapi/features`, "POST", {
       type: "Feature",
       properties: { name: "test point", tags: ["a", "b"], services: ["lift"] },
       geometry: { type: "Point", coordinates: [1, 2] },
@@ -180,7 +181,7 @@ describe("/features/:id CRUD", () => {
     const stored = await server.pool.query("SELECT properties, tags FROM features WHERE id = $1", [id]);
     expect(stored.rows[0]).toEqual({ properties: { name: "test point", services: ["lift"] }, tags: ["a", "b"] });
 
-    const replaced = await send<Feature>(`${server.url}/features/${id}`, "PUT", {
+    const replaced = await send<Feature>(`${server.url}/restapi/features/${id}`, "PUT", {
       type: "Feature",
       properties: { name: "moved", floors: [1] },
       geometry: {
@@ -205,9 +206,9 @@ describe("/features/:id CRUD", () => {
       },
     });
 
-    const deleted = await request(`${server.url}/features/${id}`, { method: "DELETE" });
+    const deleted = await request(`${server.url}/restapi/features/${id}`, { method: "DELETE" });
     expect(deleted).toMatchObject({ status: 200, body: { deleted: true } });
-    const again = await request(`${server.url}/features/${id}`, { method: "DELETE" });
+    const again = await request(`${server.url}/restapi/features/${id}`, { method: "DELETE" });
     expect(again).toMatchObject({ status: 200, body: { deleted: false } });
   });
 
@@ -218,8 +219,8 @@ describe("/features/:id CRUD", () => {
       geometry: { type: "Point", coordinates: [0, 0] },
     };
     for (const [url, method] of [
-      [`${server.url}/features`, "POST"],
-      [`${server.url}/features/7`, "PUT"],
+      [`${server.url}/restapi/features`, "POST"],
+      [`${server.url}/restapi/features/7`, "PUT"],
     ] as const) {
       const { status, body } = await send(url, method, feature);
       expect(status).toBe(400);
@@ -228,7 +229,7 @@ describe("/features/:id CRUD", () => {
   });
 
   it("PUT: 404 for an id that doesn't exist", async () => {
-    const { status, body } = await send(`${server.url}/features/999999`, "PUT", {
+    const { status, body } = await send(`${server.url}/restapi/features/999999`, "PUT", {
       type: "Feature",
       properties: {},
       geometry: { type: "Point", coordinates: [0, 0] },
@@ -238,7 +239,7 @@ describe("/features/:id CRUD", () => {
   });
 
   it("POST without a geometry: 500 with the database's reason, as before", async () => {
-    const { status, body } = await send(`${server.url}/features`, "POST", { type: "Feature", properties: {} });
+    const { status, body } = await send(`${server.url}/restapi/features`, "POST", { type: "Feature", properties: {} });
     expect(status).toBe(500);
     expect(body).toHaveProperty("error");
   });

@@ -86,7 +86,7 @@ describe("POST /collections/{id}/items (create)", () => {
       visit: "2024-01-02",
     });
     // The REST API serves it the same.
-    const rest = await request<Feature>(`${server.url}/features/${id}`);
+    const rest = await request<Feature>(`${server.url}/restapi/features/${id}`);
     const { links: _l, ...ogc } = (await get(path)).body as Feature & { links: unknown };
     expect(ogc).toEqual(rest.body);
   });
@@ -277,15 +277,20 @@ describe("bodies are checked against /schema (Part 4 Req 43)", () => {
     expect((await write("POST", "/collections/routes/items", "x", "text/plain")).status).toBe(415);
   });
 
-  it("Content-Crs: CRS84 is taken; another CRS is refused (no Part 2 yet, Req 39)", async () => {
+  it("Content-Crs: each offered CRS is taken (Part 2 with Part 4, Req 40–42; the geometry: test/ogc-crs.test.ts)", async () => {
     const body = feature({ name: "CRS" });
-    const crs84 = await write("POST", "/collections/routes/items", body, GEOJSON, {
-      "Content-Crs": "<http://www.opengis.net/def/crs/OGC/1.3/CRS84>",
-    });
-    expect(crs84.status).toBe(201);
-    created.push(new URL(crs84.location as string).pathname);
+    for (const crs of [
+      "http://www.opengis.net/def/crs/OGC/1.3/CRS84",
+      "http://www.opengis.net/def/crs/OGC/0/CRS84h",
+      "http://www.opengis.net/def/crs/EPSG/0/4326",
+      "http://www.opengis.net/def/crs/EPSG/0/3857",
+    ]) {
+      const res = await write("POST", "/collections/routes/items", body, GEOJSON, { "Content-Crs": `<${crs}>` });
+      expect(res.status, crs).toBe(201);
+      created.push(new URL(res.location as string).pathname);
+    }
     const other = await write("POST", "/collections/routes/items", body, GEOJSON, {
-      "Content-Crs": "<http://www.opengis.net/def/crs/EPSG/0/3857>",
+      "Content-Crs": "<http://www.opengis.net/def/crs/EPSG/0/32631>",
     });
     expect(other.status).toBe(400);
   });
@@ -314,7 +319,7 @@ describe("OPTIONS and methods (Part 4 Req 1, 15, 16)", () => {
   });
 
   it("the REST API's OPTIONS answers as before (204, CORS)", async () => {
-    const res = await fetch(`${server.url}/features`, {
+    const res = await fetch(`${server.url}/restapi/features`, {
       method: "OPTIONS",
       headers: { Origin: "http://localhost:5173", "Access-Control-Request-Method": "PUT" },
     });

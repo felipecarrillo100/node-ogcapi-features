@@ -13,6 +13,7 @@ import { landingRouter, ogcConformanceRouter } from "./ogc/landing.ts";
 import { openApiRouter } from "./ogc/openapi.ts";
 import { schemasRouter } from "./ogc/schemas.ts";
 import { methodNotAllowedRouter, ogcBodyErrors, optionsRouter, writesRouter } from "./ogc/writes.ts";
+import { routesRouter } from "./routes/routes.ts";
 
 // MapLibre GL JS's files, served from this server (not a CDN) for the map on the HTML pages.
 const MAPLIBRE_DIST = path.dirname(createRequire(import.meta.url).resolve("maplibre-gl/package.json"));
@@ -27,16 +28,16 @@ export function createApp(pool: Pool): Express {
   app.use(cors());
   app.use(express.json());
 
-  // The REST routes MapEvolution's tests use, as they were. Order matters: /features/queryables before /features/:id.
-  app.use(featuresRouter(pool));
-  // /conformance: the OGC API's HTML form and its parameter checks first; a plain request reaches the REST route.
-  app.use(ogcConformanceRouter());
-  app.use(conformanceRouter());
-  app.use(detailsRouter(pool));
-  app.use(maintenanceRouter(pool));
+  // The REST API, under /restapi: one router per table, and its own /conformance. Order matters inside each router
+  // (/features/queryables before /features/:id).
+  const restApi = express.Router();
+  restApi.use(featuresRouter(pool), routesRouter(pool), detailsRouter(pool), maintenanceRouter(pool));
+  restApi.use(conformanceRouter());
+  app.use("/restapi", restApi);
 
   // OGC API Features (src/ogc/).
   app.use(landingRouter());
+  app.use(ogcConformanceRouter());
   app.use(openApiRouter());
   app.use(collectionsRouter(pool));
   app.use(itemsRouter(pool));

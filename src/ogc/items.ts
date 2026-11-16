@@ -2,7 +2,8 @@ import type { Request } from "express";
 import { Router } from "express";
 import type { Feature, Geometry } from "geojson";
 import type { Pool } from "pg";
-import { type Collection, collectionById, GEOMETRY, geometry84 } from "./collections.ts";
+import { type Collection, collectionById, GEOMETRY } from "./collections.ts";
+import { type Crs, contentCrsHeader, crsParam, geometryIn } from "./crs.ts";
 import { escapeHtml, notFound } from "./errors.ts";
 import { addFilter, addFilters, itemsParams } from "./filter.ts";
 import { ogc, sendHtml, sendJson } from "./handler.ts";
@@ -27,8 +28,10 @@ function itemsWhere(req: Request, c: Collection): Where {
   // bbox and datetime are CQL2 too, compiled by toSql as filters are, so they select what the map selects: the
   // box as S_INTERSECTS (ogc-cql2's exact test, across the antimeridian as one literal; PostGIS's ST_Intersects misses
   // points on an edge on arm64), the instant or interval as T_INTERSECTS (to the millisecond).
+  // bbox-crs (Part 2): the box's numbers in that CRS, which toSql transforms to CRS84 (ogc-cql2's `literals`).
+  const bboxCrs = crsParam(req, "bbox-crs");
   const bbox = parseBbox(req);
-  if (bbox) addFilter(where, c, { op: "s_intersects", args: [{ property: GEOMETRY }, { bbox }] }, "bbox");
+  if (bbox) addFilter(where, c, { op: "s_intersects", args: [{ property: GEOMETRY }, { bbox }] }, "bbox", bboxCrs);
   const datetime = datetimeLiteral(req);
   // Without an instant (features), datetime selects every feature (Part 1).
   if (datetime && c.instant) {
@@ -38,8 +41,10 @@ function itemsWhere(req: Request, c: Collection): Where {
   return where;
 }
 
-const select = (c: Collection) =>
-  `SELECT f.id, ${c.properties} AS properties, ST_AsGeoJSON(${geometry84(c)}) AS geom_json FROM ${c.source}`;
+/** The features' SELECT, the geometry in `crs` (Part 2): 9 decimals in degrees, 15 in metres. */
+const select = (c: Collection, crs: Crs) =>
+  `SELECT f.id, ${c.properties} AS properties,
+   ST_AsGeoJSON(${geometryIn(crs, c.srid)}, ${crs.srid === 4326 ? 9 : 15}, 0) AS geom_json FROM ${c.source}`;
 
 const toFeature = (row: Row): Feature<Geometry> & { id: number } => ({
   type: "Feature",
@@ -72,11 +77,12 @@ export function itemsRouter(pool: Pool): Router {
       checkParams(req, itemsParams(c));
       const limit = parseLimit(req);
       const offset = parseOffset(req);
+      const crs = crsParam(req, "crs");
       const where = itemsWhere(req, c);
       const n = where.params.length;
       const [count, rows] = await Promise.all([
         pool.query<{ n: number }>(`SELECT count(*)::int AS n FROM ${c.source} ${where}`, where.params),
-        pool.query<Row>(`${select(c)} ${where} ORDER BY f.id LIMIT $${n + 1} OFFSET $${n + 2}`, [
+        pool.query<Row>(`${select(c, crs)} ${where} ORDER BY f.id LIMIT $${n + 1} OFFSET $${n + 2}`, [
           ...where.params,
           limit,
           offset,
@@ -93,10 +99,14 @@ export function itemsRouter(pool: Pool): Router {
         features,
         links,
       };
-      if (f === "json") return sendJson(res, MEDIA.geojson, body);
+      if (f === "json") {
+        res.setHeader("Content-Crs", contentCrsHeader(crs));
+        return sendJson(res, MEDIA.geojson, body);
+      }
 
-      // The map shows exactly the features listed: this page's own query, as GeoJSON.
-      const dataUrl = url(req, req.path, { ...ownQuery(req), f: "json" });
+      // The map shows exactly the features listed: this page's own query, as GeoJSON, in CRS84 whatever `crs` asks.
+      const { crs: _crs, ...query } = ownQuery(req);
+      const dataUrl = url(req, req.path, { ...query, f: "json" });
       // One column per property: the queryables in their order (not the geometry), then any other found.
       const columns = Object.keys(c.queryables).filter((name) => name !== GEOMETRY);
       const table = featuresTable(features, columns, (id) =>
@@ -117,12 +127,13 @@ export function itemsRouter(pool: Pool): Router {
     "/collections/:collectionId/items/:featureId",
     ogc(async (req, res, f: Format) => {
       const c = collectionOf(req);
-      checkParams(req, ["f"]);
+      checkParams(req, ["f", "crs"]);
+      const crs = crsParam(req, "crs");
       const id = String(req.params.featureId);
       // The ids are SERIAL: anything else isn't a feature here.
       const row =
         /^\d{1,10}$/.test(id) && Number(id) <= 2147483647
-          ? (await pool.query<Row>(`${select(c)} WHERE f.id = $1`, [Number(id)])).rows[0]
+          ? (await pool.query<Row>(`${select(c, crs)} WHERE f.id = $1`, [Number(id)])).rows[0]
           : undefined;
       if (!row) throw notFound(`No feature "${id}" in collection "${c.id}"`);
       const links: Link[] = [
@@ -130,7 +141,10 @@ export function itemsRouter(pool: Pool): Router {
         { href: url(req, `/collections/${c.id}`, { f: "json" }), rel: "collection", type: MEDIA.json, title: c.title },
       ];
       const feature = { ...toFeature(row), links };
-      if (f === "json") return sendJson(res, MEDIA.geojson, feature);
+      if (f === "json") {
+        res.setHeader("Content-Crs", contentCrsHeader(crs));
+        return sendJson(res, MEDIA.geojson, feature);
+      }
       const html = [
         `<h1>${escapeHtml(c.title)}: feature ${feature.id}</h1>`,
         mapScript({ url: url(req, req.path, { f: "json" }) }),

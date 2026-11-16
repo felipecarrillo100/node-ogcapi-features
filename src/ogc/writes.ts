@@ -2,49 +2,49 @@ import express, { type NextFunction, type Request, type Response, Router } from 
 import type { Pool } from "pg";
 import { NATIVE_COLUMNS, nativeParams, splitProperties } from "../features/storage.ts";
 import { type Collection, collectionById } from "./collections.ts";
-import { badRequest, invalidBody, notFound, OgcError, sendError } from "./errors.ts";
+import { type Crs, contentCrs, geometryFromGeoJson } from "./crs.ts";
+import { invalidBody, notFound, OgcError, sendError } from "./errors.ts";
 import { ogc } from "./handler.ts";
 import { url } from "./links.ts";
 import { checkParams } from "./params.ts";
 import { applyPatch, type FeatureInput, readFeature } from "./validate.ts";
 
 /** How a collection's features are written: its table's own SQL. */
-interface Writer {
-  /** Adds the feature; its new id. */
-  insert(pool: Pool, f: FeatureInput): Promise<number>;
-  /** Replaces the feature's properties, and its geometry unless `undefined`; whether it was there. */
+export interface Writer {
+  /** Adds the feature, its geometry sent in `crs`; its new id. */
+  insert(pool: Pool, f: FeatureInput, crs: Crs): Promise<number>;
+  /** Replaces the feature's properties, and its geometry (sent in `crs`) unless `undefined`; whether it was there. */
   update(
     pool: Pool,
     id: number,
     properties: Record<string, unknown>,
-    geometry?: FeatureInput["geometry"],
+    geometry: FeatureInput["geometry"] | undefined,
+    crs: Crs,
   ): Promise<boolean>;
   /** Deletes the feature; whether it was there. */
   remove(pool: Pool, id: number): Promise<boolean>;
 }
 
-/** The geometry from GeoJSON text (CRS84) into the column's SRID; NULL stays NULL (the column keeps its value). */
-const fromGeoJson = (param: string, srid: number) =>
-  srid === 4326
-    ? `ST_SetSRID(ST_GeomFromGeoJSON(${param}), 4326)`
-    : `ST_Transform(ST_SetSRID(ST_GeomFromGeoJSON(${param}), 4326), ${srid})`;
+/** The geometry from GeoJSON text in `crs` into the column's SRID; NULL stays NULL (the column keeps its value). */
+const fromGeoJson = (param: string, crs: Crs, srid: number) => geometryFromGeoJson(param, crs, srid);
 const geometryText = (g: FeatureInput["geometry"] | undefined) => (g === undefined ? null : JSON.stringify(g));
 
-const WRITERS: Record<string, Writer> = {
+/** Each collection's writer; the REST API's /restapi/routes uses the `routes` one too. */
+export const WRITERS: Record<string, Writer> = {
   // The REST API's storage: the native lists to their columns (splitProperties), the rest to the jsonb.
   features: {
-    async insert(pool, f) {
+    async insert(pool, f, crs) {
       const split = splitProperties(f.properties) as NonNullable<ReturnType<typeof splitProperties>>;
       const { rows } = await pool.query<{ id: number }>(
-        `INSERT INTO features (properties, geom, ${NATIVE_COLUMNS}) VALUES ($1, ${fromGeoJson("$2", 4326)}, ${nativeParams(3)}) RETURNING id`,
+        `INSERT INTO features (properties, geom, ${NATIVE_COLUMNS}) VALUES ($1, ${fromGeoJson("$2", crs, 4326)}, ${nativeParams(3)}) RETURNING id`,
         [split.rest, geometryText(f.geometry), ...split.lists],
       );
       return (rows[0] as { id: number }).id;
     },
-    async update(pool, id, properties, geometry) {
+    async update(pool, id, properties, geometry, crs) {
       const split = splitProperties(properties) as NonNullable<ReturnType<typeof splitProperties>>;
       const { rowCount } = await pool.query(
-        `UPDATE features SET properties = $1, geom = coalesce(${fromGeoJson("$2", 4326)}, geom),
+        `UPDATE features SET properties = $1, geom = coalesce(${fromGeoJson("$2", crs, 4326)}, geom),
          (${NATIVE_COLUMNS}) = ROW(${nativeParams(4)}) WHERE id = $3`,
         [split.rest, geometryText(geometry), id, ...split.lists],
       );
@@ -56,19 +56,19 @@ const WRITERS: Record<string, Writer> = {
   },
   // Real columns; the geometry stored in EPSG:3857.
   routes: {
-    async insert(pool, f) {
+    async insert(pool, f, crs) {
       const p = f.properties;
       const { rows } = await pool.query<{ id: number }>(
         `INSERT INTO routes (name, departure, length_km, lanes, geom)
-         VALUES ($1, $2::timestamptz, $3, $4, ${fromGeoJson("$5", 3857)}) RETURNING id`,
+         VALUES ($1, $2::timestamptz, $3, $4, ${fromGeoJson("$5", crs, 3857)}) RETURNING id`,
         [p.name, p.departure ?? null, p.length_km ?? null, p.lanes ?? null, geometryText(f.geometry)],
       );
       return (rows[0] as { id: number }).id;
     },
-    async update(pool, id, p, geometry) {
+    async update(pool, id, p, geometry, crs) {
       const { rowCount } = await pool.query(
         `UPDATE routes SET name = $1, departure = $2::timestamptz, length_km = $3, lanes = $4,
-         geom = coalesce(${fromGeoJson("$5", 3857)}, geom) WHERE id = $6`,
+         geom = coalesce(${fromGeoJson("$5", crs, 3857)}, geom) WHERE id = $6`,
         [p.name, p.departure ?? null, p.length_km ?? null, p.lanes ?? null, geometryText(geometry), id],
       );
       return (rowCount ?? 0) > 0;
@@ -78,16 +78,6 @@ const WRITERS: Record<string, Writer> = {
     },
   },
 };
-
-const CRS84 = ["http://www.opengis.net/def/crs/OGC/1.3/CRS84", "http://www.opengis.net/def/crs/OGC/0/CRS84h"];
-
-/** Part 4 Req 39: without Part 2, a body in another CRS than CRS84 (`Content-Crs`) is refused. */
-function checkContentCrs(req: Request): void {
-  const header = req.get("content-crs");
-  if (header === undefined) return;
-  const uri = header.trim().replace(/^<(.*)>$/, "$1");
-  if (!CRS84.includes(uri)) throw badRequest(`Unsupported Content-Crs ${header}: this server reads CRS84 bodies only`);
-}
 
 /** 415 unless the body's media type is one of `types`. */
 function checkMediaType(req: Request, types: string[]): void {
@@ -131,8 +121,7 @@ export function writesRouter(pool: Pool): Router {
       const c = collectionOf(req);
       checkParams(req, []);
       checkMediaType(req, FEATURE_TYPES);
-      checkContentCrs(req);
-      const id = await c.writer.insert(pool, readFeature(c, req.body));
+      const id = await c.writer.insert(pool, readFeature(c, req.body), contentCrs(req));
       res
         .status(201)
         .location(url(req, `/collections/${c.id}/items/${id}`))
@@ -147,10 +136,10 @@ export function writesRouter(pool: Pool): Router {
       const id = idOf(req, c);
       checkParams(req, []);
       checkMediaType(req, FEATURE_TYPES);
-      checkContentCrs(req);
+      const crs = contentCrs(req);
       // An "id" in the body is ignored (Part 4 Req 45): the path names the feature.
       const f = readFeature(c, req.body);
-      if (!(await c.writer.update(pool, id, f.properties, f.geometry)))
+      if (!(await c.writer.update(pool, id, f.properties, f.geometry, crs)))
         throw notFound(`No feature "${id}" in collection "${c.id}"`);
       res.status(204).end();
     }),
@@ -163,7 +152,7 @@ export function writesRouter(pool: Pool): Router {
       const id = idOf(req, c);
       checkParams(req, []);
       checkMediaType(req, ["application/merge-patch+json"]);
-      checkContentCrs(req);
+      const crs = contentCrs(req);
       const { rows } = await pool.query<{ properties: Record<string, unknown> }>(
         `SELECT ${c.properties} AS properties FROM ${c.source} WHERE f.id = $1`,
         [id],
@@ -171,7 +160,7 @@ export function writesRouter(pool: Pool): Router {
       const current = rows[0];
       if (!current) throw notFound(`No feature "${id}" in collection "${c.id}"`);
       const patched = applyPatch(c, id, current.properties, req.body);
-      if (!(await c.writer.update(pool, id, patched.properties, patched.geometry)))
+      if (!(await c.writer.update(pool, id, patched.properties, patched.geometry, crs)))
         throw notFound(`No feature "${id}" in collection "${c.id}"`);
       res.status(204).end();
     }),

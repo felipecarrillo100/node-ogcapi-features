@@ -31,6 +31,7 @@ describe("GET /conformance", () => {
         `${FEATURES_1}/oas30`,
         `${FEATURES_1}/html`,
         `${FEATURES_1}/geojson`,
+        "http://www.opengis.net/spec/ogcapi-features-2/1.0/conf/crs",
         `${FEATURES_3}/queryables`,
         `${FEATURES_3}/queryables-query-parameters`,
         `${FEATURES_3}/filter`,
@@ -64,5 +65,50 @@ describe("GET /conformance", () => {
   it("refuses an unknown parameter or f (Part 1)", async () => {
     expect((await request(`${server.url}/conformance?x=1`)).status).toBe(400);
     expect((await request(`${server.url}/conformance?f=xml`)).status).toBe(400);
+  });
+});
+
+describe("GET /restapi/conformance", () => {
+  it("lists the REST API's CQL2 classes only: the 9 MapEvolution reads first, in order, then temporal and arithmetic", async () => {
+    const { status, contentType, body } = await request(`${server.url}/restapi/conformance`);
+    expect(status).toBe(200);
+    expect(contentType).toBe("application/json; charset=utf-8");
+    expect(body).toEqual({
+      conformsTo: [
+        `${CQL2}/basic-cql2`,
+        `${CQL2}/advanced-comparison-operators`,
+        `${CQL2}/case-insensitive-comparison`,
+        `${CQL2}/accent-insensitive-comparison`,
+        `${CQL2}/property-property`,
+        `${CQL2}/array-functions`,
+        `${CQL2}/basic-spatial-functions`,
+        `${CQL2}/basic-spatial-functions-plus`,
+        `${CQL2}/spatial-functions`,
+        `${CQL2}/temporal-functions`,
+        `${CQL2}/arithmetic`,
+      ],
+    });
+  });
+
+  it("takes any query, as the REST API's /conformance always has", async () => {
+    const { status, body } = await request(`${server.url}/restapi/conformance?x=1`);
+    expect(status).toBe(200);
+    expect((body as { conformsTo: string[] }).conformsTo).toHaveLength(11);
+  });
+});
+
+describe("the REST API's old paths", () => {
+  it("answer 404: the REST API is under /restapi only", async () => {
+    for (const path of [
+      "/features",
+      "/features/7",
+      "/features/queryables",
+      "/features/7/details",
+      "/tile-features/7/maintenance",
+      "/routes",
+    ]) {
+      expect((await request(`${server.url}${path}`)).status, path).toBe(404);
+    }
+    expect((await request(`${server.url}/features`, { method: "POST" })).status).toBe(404);
   });
 });

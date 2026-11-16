@@ -166,14 +166,14 @@ describe("filter with the other parameters", () => {
     ]);
   });
 
-  it("filter-crs: CRS84 is accepted; any other CRS is refused until Part 2 (400)", async () => {
-    const crs84 = "http://www.opengis.net/def/crs/OGC/1.3/CRS84";
-    expect(ids((await items("routes", { filter: "lanes = 6", "filter-crs": crs84 })).body)).toEqual([10]);
-    const other = await items("routes", {
-      filter: "lanes = 6",
-      "filter-crs": "http://www.opengis.net/def/crs/EPSG/0/3857",
-    });
-    expect(other).toMatchObject({ status: 400, body: { code: "InvalidParameterValue" } });
+  it("filter-crs: a filter without geometries answers the same in any offered CRS (the CRSs: test/ogc-crs.test.ts)", async () => {
+    for (const crs of [
+      "http://www.opengis.net/def/crs/OGC/1.3/CRS84",
+      "http://www.opengis.net/def/crs/EPSG/0/4326",
+      "http://www.opengis.net/def/crs/EPSG/0/3857",
+    ]) {
+      expect(ids((await items("routes", { filter: "lanes = 6", "filter-crs": crs })).body), crs).toEqual([10]);
+    }
   });
 
   it("the HTML page's map fetches the features with the same filter", async () => {
@@ -268,7 +268,7 @@ describe("/queryables and /schema", () => {
 
   it("/queryables of features: the REST API's queryables, the same types", async () => {
     const ogc = (await request<Schema>(`${server.url}/collections/features/queryables`)).body;
-    const rest = (await request<Schema>(`${server.url}/features/queryables`)).body;
+    const rest = (await request<Schema>(`${server.url}/restapi/features/queryables`)).body;
     for (const [name, q] of Object.entries(rest.properties)) expect(ogc.properties[name]).toMatchObject(q);
     expect(Object.keys(ogc.properties)).toEqual(Object.keys(rest.properties));
   });

@@ -1,14 +1,12 @@
 import type { Request } from "express";
-import type { Cql2Filter } from "ogc-cql2";
 import { fromText } from "ogc-cql2/parse";
 import { type SqlOptions, toSql } from "ogc-cql2/sql";
 import { validate } from "ogc-cql2/validate";
 import { CQL2_DECLARED } from "../conformance.ts";
 import { type Collection, simpleQueryables } from "./collections.ts";
+import { CRS84, type Crs, checkArea, crsParam, literalsOf } from "./crs.ts";
 import { badRequest } from "./errors.ts";
 import type { Where } from "./where.ts";
-
-export const CRS84 = "http://www.opengis.net/def/crs/OGC/1.3/CRS84";
 
 /** The query parameters of Part 3 on `/items`. */
 export const FILTER_PARAMS = ["filter", "filter-lang", "filter-crs"] as const;
@@ -26,26 +24,28 @@ function reason(e: unknown): string {
   return err.code ? `${err.message} (${err.code}${where})` : err.message;
 }
 
-/** `filter` as CQL2-JSON: from CQL2-text (`filter-lang=cql2-text`, the default, Part 3) or as it comes. */
-function parseFilter(req: Request): Cql2Filter | undefined {
+/**
+ * `filter` as CQL2-JSON, from CQL2-text (`filter-lang=cql2-text`, the default, Part 3) or as it comes, and the CRS its
+ * literals are in (`filter-crs`). The literals are left in that CRS: `toSql` transforms them (`literals`).
+ */
+function parseFilter(req: Request): { filter: unknown; crs: Crs } | undefined {
   const filter = param(req, "filter");
   const lang = param(req, "filter-lang") ?? "cql2-text";
   if (lang !== "cql2-text" && lang !== "cql2-json")
     throw badRequest(`Invalid filter-lang "${lang}": cql2-text or cql2-json`);
-  const crs = param(req, "filter-crs");
-  if (crs !== undefined && crs !== CRS84)
-    throw badRequest(`Invalid filter-crs "${crs}": this server reads ${CRS84} only`);
+  const crs = crsParam(req, "filter-crs");
   if (filter === undefined) return undefined;
   if (lang === "cql2-json") {
     try {
       // `validate` checks it (addFilter).
-      return JSON.parse(filter) as Cql2Filter;
+      return { filter: JSON.parse(filter), crs };
     } catch {
       throw badRequest("Invalid filter: not valid JSON (filter-lang=cql2-json)");
     }
   }
   try {
-    return fromText(filter);
+    // Outside CRS84, the coordinates aren't checked against CRS84's ranges (crs84: false); checkArea checks them.
+    return { filter: fromText(filter, { crs84: crs === CRS84 }), crs };
   } catch (e) {
     throw badRequest(`Invalid filter: ${reason(e)}`);
   }
@@ -54,17 +54,20 @@ function parseFilter(req: Request): Cql2Filter | undefined {
 /**
  * Adds the condition of a CQL2 filter on collection `c`, the way ogc-cql2's guide says (`sql-backends.md`): first
  * `validate` against the declared CQL2 classes and the collection's queryables (400 with every problem), then `toSql`.
- * `label` names what the filter came from, for the error (`filter`, `bbox`, `datetime`, a queryable parameter).
+ * `label` names what the filter came from, for the error (`filter`, `bbox`, `datetime`, a queryable parameter); `crs`
+ * is the CRS of its geometry and BBOX literals (`filter-crs`, `bbox-crs`), which `toSql` transforms to CRS84 in
+ * PostGIS (ogc-cql2's `literals`).
  */
-export function addFilter(where: Where, c: Collection, filter: unknown, label = "filter"): void {
-  const result = validate(filter, { conformance: CQL2_DECLARED, queryables: c.queryables });
+export function addFilter(where: Where, c: Collection, filter: unknown, label = "filter", crs: Crs = CRS84): void {
+  const result = validate(filter, { conformance: CQL2_DECLARED, queryables: c.queryables, crs84: crs === CRS84 });
   if (!result.valid) {
     const problems = result.problems.map((p) => `${p.message} (${p.code}${p.path ? ` at ${p.path}` : ""})`);
     throw badRequest(`Invalid ${label}: ${problems.join("; ")}`);
   }
+  checkArea(crs, result.filter, label);
   let sql: ReturnType<typeof toSql>;
   try {
-    sql = toSql(result.filter, { dialect: "postgres", columns: columns(c) });
+    sql = toSql(result.filter, { dialect: "postgres", columns: columns(c), literals: literalsOf(crs) });
   } catch (e) {
     throw badRequest(`Invalid ${label}: ${reason(e)}`);
   }
@@ -85,8 +88,8 @@ function typed(value: string, type: string): string | number | boolean | undefin
  * query parameter (`?name=Brussels`), which selects the features whose value equals it. All combine with AND.
  */
 export function addFilters(req: Request, c: Collection, where: Where): void {
-  const filter = parseFilter(req);
-  if (filter !== undefined) addFilter(where, c, filter);
+  const parsed = parseFilter(req);
+  if (parsed !== undefined) addFilter(where, c, parsed.filter, "filter", parsed.crs);
   for (const [name, q] of simpleQueryables(c)) {
     const value = param(req, name);
     if (value === undefined) continue;
@@ -102,6 +105,8 @@ export const itemsParams = (c: Collection): string[] => [
   "limit",
   "offset",
   "bbox",
+  "bbox-crs",
+  "crs",
   "datetime",
   ...FILTER_PARAMS,
   ...simpleQueryables(c).map(([name]) => name),
