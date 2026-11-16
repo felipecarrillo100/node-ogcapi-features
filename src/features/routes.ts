@@ -4,7 +4,7 @@ import type { Cql2Filter } from "ogc-cql2";
 import { type SqlOptions, toSql } from "ogc-cql2/sql";
 import { requiredConformance } from "ogc-cql2/validate";
 import type { Pool } from "pg";
-import { CONFORMS_TO } from "../conformance.ts";
+import { REST_CONFORMS_TO } from "../conformance.ts";
 import { body, route } from "../route.ts";
 import {
   type FeatureRow,
@@ -27,7 +27,7 @@ interface FeatureBody {
   properties: Record<string, unknown> | null;
 }
 
-/** GET/POST/PUT/DELETE /features[/:id], /features/queryables. */
+/** GET/POST/PUT/DELETE /features[/:id], /features/queryables (mounted at /restapi). */
 export function featuresRouter(pool: Pool): Router {
   const router = Router();
 
@@ -60,7 +60,7 @@ export function featuresRouter(pool: Pool): Router {
         try {
           // toSql numbers its placeholders from $1: shift them past the bbox's.
           const { where, params: values } = toSql(parsed, { dialect: "postgres", columns: COLUMNS });
-          const missing = requiredConformance(parsed).filter((uri) => !CONFORMS_TO.includes(uri));
+          const missing = requiredConformance(parsed).filter((uri) => !REST_CONFORMS_TO.includes(uri));
           if (missing.length) {
             return res.status(400).json({
               error: `Invalid filter: this server doesn't support ${missing.join(", ")}`,

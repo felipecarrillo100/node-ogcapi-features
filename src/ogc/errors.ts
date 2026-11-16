@@ -14,6 +14,8 @@ export class OgcError extends Error {
 
 export const badRequest = (description: string): OgcError => new OgcError(400, "InvalidParameterValue", description);
 export const notFound = (description: string): OgcError => new OgcError(404, "NotFound", description);
+/** A request body that isn't a valid feature or patch (Part 4). */
+export const invalidBody = (description: string): OgcError => new OgcError(400, "InvalidRequestBody", description);
 
 /** Answers `e` (an `OgcError`, else a 500) in the format the request asked for; HTML only when it asked for HTML. */
 export function sendError(req: Request, res: Response, e: unknown, html: boolean): void {

@@ -24,16 +24,20 @@ commit the current state), or keep a copy of every file you change outside this 
 ## Who uses it (do not break)
 
 MapEvolution's REST test layer (`spatial-test-postgis`, `SpatialTestStoreAdapter.ts` in demo-react and demo-vue) and
-its e2e spec `demo-react/e2e/specs/95-filters.spec.ts`. They call:
-- `GET /features` with `bbox=` and `filter=<CQL2-JSON>`, and `GET/POST/PUT/DELETE /features[/:id]`;
-- `GET /conformance`, which must keep listing these CQL2 class URIs: basic-cql2, advanced-comparison-operators,
-  case-insensitive-comparison, accent-insensitive-comparison, property-property, array-functions,
-  basic-spatial-functions, basic-spatial-functions-plus, spatial-functions. Not temporal-functions, not arithmetic;
-- `GET /features/queryables` (OGC Part 3 form);
-- `GET/PUT /features/:id/details`, `GET/PUT /tile-features/:id/maintenance`.
+its e2e spec `demo-react/e2e/specs/95-filters.spec.ts`. The REST API is under `/restapi` (the owner's decision,
+2026-11-16, replacing the root paths with no aliases; MapEvolution has to follow, and the owner changes it). They call:
+- `GET /restapi/features` with `bbox=` and `filter=<CQL2-JSON>`, and `GET/POST/PUT/DELETE /restapi/features[/:id]`;
+- `GET /restapi/conformance`, the REST API's own, which must keep listing these CQL2 class URIs: basic-cql2,
+  advanced-comparison-operators, case-insensitive-comparison, accent-insensitive-comparison, property-property,
+  array-functions, basic-spatial-functions, basic-spatial-functions-plus, spatial-functions, first and in this order,
+  then temporal-functions and arithmetic (the owner's decision, 2026-11-16), and nothing else. The OGC API's
+  `/conformance` is separate;
+- `GET /restapi/features/queryables` (OGC Part 3 form);
+- `GET/PUT /restapi/features/:id/details`, `GET/PUT /restapi/tile-features/:id/maintenance`.
 
-These routes stay as they are (the owner's decision, 2026-11-16). MapEvolution's `FlexibleRestStore` exists for REST
-APIs that aren't OGC API, and this server is its only test target.
+`/restapi/routes[/:id]` and `/restapi/routes/queryables` (2026-11-16) do the same on the `routes` table, serving what
+the OGC API's `routes` collection serves. MapEvolution's `FlexibleRestStore` exists for REST APIs that aren't OGC API,
+and this server is its only test target.
 
 ## How to work with this owner
 
